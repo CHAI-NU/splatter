@@ -2,6 +2,9 @@
 
 **One HTML file. Zero installation. Built for qualitative researchers.**
 
+
+## [TRY OUT SPLATTER](https://hasiburrahman.cc/splatter/)
+
 Splatter is a single-file qualitative coding and affinity diagramming tool that runs entirely in your browser. Import interview transcripts, tag quotes, group themes, draw connections, and export your analysis — all without leaving the page.
 
 > **Based on [Splat](https://github.com/ianarawjo/splat) by Ian Arawjo and the Montréal HCI group.** Modified by [Hasibur Rahman](https://hasiburrahman.cc/) at [CHAI Lab](https://chainortheastern.net/). Licensed under GPL v3.0.
