@@ -7,7 +7,14 @@ All notable changes to this project will be documented in this file.
 ### Added
 - **Workspace launcher**: Full workspace management layer above multi-board tabs. Launcher screen shows workspace cards with name, note count, and last-modified date. Create, rename, and delete workspaces. Each workspace contains up to 5 independent boards. "Back to Workspaces" toolbar button to return to launcher.
 - **Legacy data migration**: On first launch, if old `splatAutosave` data exists but no workspaces are defined, auto-creates a "Migrated Board" workspace and migrates the data seamlessly.
-- **Undo/Redo system**: Command-pattern undo/redo with support for all note operations (create, delete, edit, move, color change, pin, duplicate, clear board, tag add/remove). Stacks capped at 100 entries. Toolbar buttons (↩/↪) and keyboard shortcuts.
+- **Undo/Redo system**: Command-pattern undo/redo with comprehensive coverage of all state-changing operations. Stacks capped at 100 entries. Toolbar buttons (↩/↪) and keyboard shortcuts. Supported actions:
+  - **Notes**: create, delete, edit text, move (single and multi-select), color change, pin/unpin, duplicate, bulk delete, bulk nudge
+  - **Tags**: add to note, remove from note, rename globally, merge into another tag, delete from all notes, set parent category
+  - **Codebook**: add code, import codebook CSV
+  - **Groups**: create, delete, rename, collapse/expand, drag group zone (moves all member notes), auto-layout, organize all groups
+  - **Connections**: create, delete, edit type/label
+  - **Import**: file import (txt/csv), transcript quote import
+  - **Board**: clear board
 - **Tags/Codes system**: Notes support multiple textual tags — the core primitive for qualitative coding. Tags render as colored pills below note text, with colors auto-assigned by hashing the tag name. Inline tag input with autocomplete against all existing tags. Tags persist across save/load. Backward-compatible with older boards.
 - **Codebook panel**: Resizable sidebar (drag handle, 200–600px) listing all tags with frequency counts, sortable by frequency, alphabetically, or by hierarchy. Per-tag actions: rename globally, merge into another tag, delete from all notes. Click any tag to filter the board. Export codebook as CSV.
 - **Codebook hierarchy**: Tags can be assigned parent categories via a "Parent" button. Hierarchy sort mode groups codes under their parent category headers with "Uncategorized" as fallback. Persists in `tagParents` across save/load.
@@ -47,6 +54,7 @@ All notable changes to this project will be documented in this file.
 - **Compressed auto-save**: Auto-save uses gzip compression via `CompressionStream`/`DecompressionStream` with base64 encoding for efficient localStorage usage.
 - **Focused note animation**: Purple pulse animation highlights notes when AI adds or focuses on them.
 - **Sample board**: Shown when no autosave data is detected, with notes explaining current features.
+- **GitHub link on launcher**: Footer on workspace launcher includes a link to the GitHub repository for contributing or giving feedback.
 - **Favicon**: Splatter logo as browser tab favicon.
 - **Multi-board tabs**: Tab bar supports up to 5 separate boards with independent state per workspace. Add, switch, rename, delete boards.
 - **Keyboard shortcuts**:
@@ -83,6 +91,7 @@ All notable changes to this project will be documented in this file.
 - Raw tool call detection: Chat handler detects when an LLM returns a tool call as raw JSON in content and converts it automatically.
 
 ### Fixed
+- Dragging tags from codebook onto notes now works correctly. File drop handlers no longer intercept tag drag events.
 - Note menu and pin indicator lost when AI edited a note (pre-existing bug).
 - Pin icon not appearing after note edit.
 - Early returns on `finishEditing` when double-clicking in a textarea or pressing Enter.

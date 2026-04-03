@@ -3921,14 +3921,18 @@
         }
 
         function handleDragOver(e) {
+            // Only show file drop zone for actual file drags, not tag drags
+            if (!e.dataTransfer.types.includes('Files')) return;
             e.preventDefault();
             document.getElementById('dropZone').classList.add('active');
         }
 
         function handleFileDrop(e) {
+            // Only handle actual file drops, not tag drops
+            if (!e.dataTransfer.types.includes('Files')) return;
             e.preventDefault();
             document.getElementById('dropZone').classList.remove('active');
-            
+
             const files = e.dataTransfer.files;
             if (files.length > 0) {
                 const file = files[0];
@@ -4111,10 +4115,26 @@
 
         function createNotesFromCodes(codes) {
             const canvasInner = document.getElementById('canvasInner');
-            
+            const createdNotes = [];
+
             codes.forEach((code, index) => {
                 const note = createNote(code.trim(), index);
                 canvasInner.appendChild(note);
+                const nd = notes.find(n => n.id === note.id);
+                if (nd) createdNotes.push({ ...nd, tags: [...(nd.tags || [])] });
+            });
+
+            pushUndo({
+                type: 'import-file',
+                noteIds: createdNotes.map(n => n.id),
+                undo: () => {
+                    createdNotes.forEach(n => removeNoteRaw(n.id));
+                    renderMinimap();
+                },
+                redo: () => {
+                    createdNotes.forEach(n => recreateNote(n));
+                    renderMinimap();
+                }
             });
         }
 
@@ -5766,11 +5786,31 @@
             const options = [...new Set([...existing, ...allTags])].sort();
             const parent = prompt(`Set parent category for "${tag}":\n\nExisting categories: ${existing.join(', ') || 'none'}\n\nType a category name (existing or new):`);
             if (parent === null || !parent.trim()) return;
-            tagParents[tag] = parent.trim();
+            const newParent = parent.trim();
+            const oldParent = tagParents[tag];
+            const hadParent = tag in tagParents;
+            const parentDefExisted = newParent in tagDefinitions;
+            tagParents[tag] = newParent;
             // Ensure the parent exists in definitions
-            if (!tagDefinitions[parent.trim()] && !allTags.includes(parent.trim())) {
-                tagDefinitions[parent.trim()] = '';
+            if (!tagDefinitions[newParent] && !allTags.includes(newParent)) {
+                tagDefinitions[newParent] = '';
             }
+
+            pushUndo({
+                type: 'tag-set-parent',
+                undo: () => {
+                    if (hadParent) tagParents[tag] = oldParent;
+                    else delete tagParents[tag];
+                    if (!parentDefExisted) delete tagDefinitions[newParent];
+                    refreshCodebook();
+                },
+                redo: () => {
+                    tagParents[tag] = newParent;
+                    if (!tagDefinitions[newParent] && !getAllTags().includes(newParent)) tagDefinitions[newParent] = '';
+                    refreshCodebook();
+                }
+            });
+            refreshCodebook();
         }
 
         function renderCooccurrence(list) {
@@ -5892,12 +5932,29 @@
             const trimmed = name.trim();
 
             const def = prompt(`Definition for "${trimmed}" (optional):`, '');
+            const oldDef = tagDefinitions[trimmed];
+            const hadDef = trimmed in tagDefinitions;
             if (def !== null && def.trim()) {
                 tagDefinitions[trimmed] = def.trim();
             } else {
                 // Still register it so it shows up
                 if (!tagDefinitions[trimmed]) tagDefinitions[trimmed] = '';
             }
+            const newDef = tagDefinitions[trimmed];
+
+            pushUndo({
+                type: 'codebook-add',
+                tag: trimmed,
+                undo: () => {
+                    if (hadDef) tagDefinitions[trimmed] = oldDef;
+                    else delete tagDefinitions[trimmed];
+                    refreshCodebook();
+                },
+                redo: () => {
+                    tagDefinitions[trimmed] = newDef;
+                    refreshCodebook();
+                }
+            });
 
             refreshCodebook();
             updateStatus(`Code "${trimmed}" added to codebook`);
@@ -5915,6 +5972,8 @@
                     const text = ev.target.result;
                     const lines = text.split('\n').filter(l => l.trim());
                     let imported = 0;
+                    const savedDefs = { ...tagDefinitions };
+                    const savedParents = { ...tagParents };
 
                     // Detect header
                     const firstLine = lines[0].toLowerCase();
@@ -5946,6 +6005,26 @@
                         }
                     }
 
+                    const afterDefs = { ...tagDefinitions };
+                    const afterParents = { ...tagParents };
+                    pushUndo({
+                        type: 'codebook-import',
+                        undo: () => {
+                            Object.assign(tagDefinitions, savedDefs);
+                            Object.keys(tagDefinitions).forEach(k => { if (!(k in savedDefs)) delete tagDefinitions[k]; });
+                            Object.assign(tagParents, savedParents);
+                            Object.keys(tagParents).forEach(k => { if (!(k in savedParents)) delete tagParents[k]; });
+                            refreshCodebook();
+                        },
+                        redo: () => {
+                            Object.assign(tagDefinitions, afterDefs);
+                            Object.keys(tagDefinitions).forEach(k => { if (!(k in afterDefs)) delete tagDefinitions[k]; });
+                            Object.assign(tagParents, afterParents);
+                            Object.keys(tagParents).forEach(k => { if (!(k in afterParents)) delete tagParents[k]; });
+                            refreshCodebook();
+                        }
+                    });
+
                     refreshCodebook();
                     updateStatus(`Imported ${imported} codes into codebook`);
                 };
@@ -5958,6 +6037,13 @@
             const newTag = prompt(`Rename "${oldTag}" to:`, oldTag);
             if (!newTag || newTag.trim() === '' || newTag.trim() === oldTag) return;
             const trimmed = newTag.trim();
+
+            const oldDef = tagDefinitions[oldTag];
+            const hadOldDef = oldTag in tagDefinitions;
+            const hadNewDef = trimmed in tagDefinitions;
+            const prevNewDef = tagDefinitions[trimmed];
+            // Snapshot which notes had the old tag
+            const affectedNoteIds = notes.filter(n => n.tags && n.tags.includes(oldTag)).map(n => n.id);
 
             notes.forEach(n => {
                 if (n.tags && n.tags.includes(oldTag)) {
@@ -5976,10 +6062,46 @@
             }
 
             // Update active filters
-            if (activeTagFilters.has(oldTag)) {
+            const hadFilter = activeTagFilters.has(oldTag);
+            if (hadFilter) {
                 activeTagFilters.delete(oldTag);
                 activeTagFilters.add(trimmed);
             }
+
+            pushUndo({
+                type: 'tag-rename',
+                undo: () => {
+                    // Reverse: rename trimmed back to oldTag in affected notes
+                    affectedNoteIds.forEach(id => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd && nd.tags) {
+                            nd.tags = nd.tags.map(t => t === trimmed ? oldTag : t);
+                            nd.tags = [...new Set(nd.tags)];
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    if (hadOldDef) tagDefinitions[oldTag] = oldDef;
+                    if (!hadNewDef) delete tagDefinitions[trimmed];
+                    else tagDefinitions[trimmed] = prevNewDef;
+                    if (hadFilter) { activeTagFilters.delete(trimmed); activeTagFilters.add(oldTag); }
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
+                },
+                redo: () => {
+                    affectedNoteIds.forEach(id => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd && nd.tags) {
+                            nd.tags = nd.tags.map(t => t === oldTag ? trimmed : t);
+                            nd.tags = [...new Set(nd.tags)];
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    if (hadOldDef) { tagDefinitions[trimmed] = oldDef; delete tagDefinitions[oldTag]; }
+                    if (hadFilter) { activeTagFilters.delete(oldTag); activeTagFilters.add(trimmed); }
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
+                }
+            });
 
             tagHistory.push({ action: 'rename', from: oldTag, to: trimmed, timestamp: new Date().toISOString() });
             refreshCodebook();
@@ -5998,6 +6120,14 @@
             if (!target || target.trim() === '' || target.trim() === sourceTag) return;
             const trimmed = target.trim();
 
+            // Snapshot for undo
+            const affectedNotes = notes.filter(n => n.tags && n.tags.includes(sourceTag)).map(n => ({ id: n.id, tags: [...n.tags] }));
+            const hadFilter = activeTagFilters.has(sourceTag);
+            const oldSourceDef = tagDefinitions[sourceTag];
+            const hadSourceDef = sourceTag in tagDefinitions;
+            const oldTargetDef = tagDefinitions[trimmed];
+            const hadTargetDef = trimmed in tagDefinitions;
+
             notes.forEach(n => {
                 if (n.tags && n.tags.includes(sourceTag)) {
                     n.tags = n.tags.filter(t => t !== sourceTag);
@@ -6007,7 +6137,7 @@
                 }
             });
 
-            if (activeTagFilters.has(sourceTag)) {
+            if (hadFilter) {
                 activeTagFilters.delete(sourceTag);
                 activeTagFilters.add(trimmed);
             }
@@ -6021,6 +6151,42 @@
                 }
                 delete tagDefinitions[sourceTag];
             }
+            const newTargetDef = tagDefinitions[trimmed];
+
+            pushUndo({
+                type: 'tag-merge',
+                undo: () => {
+                    // Restore original tags on affected notes
+                    affectedNotes.forEach(({ id, tags }) => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd) {
+                            nd.tags = [...tags];
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    if (hadSourceDef) tagDefinitions[sourceTag] = oldSourceDef;
+                    if (hadTargetDef) tagDefinitions[trimmed] = oldTargetDef;
+                    else delete tagDefinitions[trimmed];
+                    if (hadFilter) { activeTagFilters.delete(trimmed); activeTagFilters.add(sourceTag); }
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
+                },
+                redo: () => {
+                    affectedNotes.forEach(({ id }) => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd && nd.tags) {
+                            nd.tags = nd.tags.filter(t => t !== sourceTag);
+                            if (!nd.tags.includes(trimmed)) nd.tags.push(trimmed);
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    if (hadSourceDef) delete tagDefinitions[sourceTag];
+                    tagDefinitions[trimmed] = newTargetDef;
+                    if (hadFilter) { activeTagFilters.delete(sourceTag); activeTagFilters.add(trimmed); }
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
+                }
+            });
 
             tagHistory.push({ action: 'merge', from: sourceTag, to: trimmed, timestamp: new Date().toISOString() });
             refreshCodebook();
@@ -6032,11 +6198,55 @@
         function deleteTag(tag) {
             if (!confirm(`Remove tag "${tag}" from all notes?`)) return;
 
+            // Snapshot for undo
+            const affectedNotes = notes.filter(n => n.tags && n.tags.includes(tag)).map(n => n.id);
+            const hadFilter = activeTagFilters.has(tag);
+            const oldDef = tagDefinitions[tag];
+            const hadDef = tag in tagDefinitions;
+            const oldParent = tagParents[tag];
+            const hadParent = tag in tagParents;
+
             notes.forEach(n => {
                 if (n.tags && n.tags.includes(tag)) {
                     n.tags = n.tags.filter(t => t !== tag);
                     const el = document.getElementById(n.id);
                     if (el) renderNoteTags(el, n.tags);
+                }
+            });
+
+            delete tagDefinitions[tag];
+            delete tagParents[tag];
+
+            pushUndo({
+                type: 'tag-delete',
+                undo: () => {
+                    affectedNotes.forEach(id => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd) {
+                            if (!nd.tags) nd.tags = [];
+                            if (!nd.tags.includes(tag)) nd.tags.push(tag);
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    if (hadDef) tagDefinitions[tag] = oldDef;
+                    if (hadParent) tagParents[tag] = oldParent;
+                    if (hadFilter) activeTagFilters.add(tag);
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
+                },
+                redo: () => {
+                    affectedNotes.forEach(id => {
+                        const nd = notes.find(n => n.id === id);
+                        if (nd && nd.tags) {
+                            nd.tags = nd.tags.filter(t => t !== tag);
+                            const el = document.getElementById(id);
+                            if (el) renderNoteTags(el, nd.tags);
+                        }
+                    });
+                    delete tagDefinitions[tag];
+                    delete tagParents[tag];
+                    activeTagFilters.delete(tag);
+                    refreshCodebook(); refreshFilterBar(); applyFilters();
                 }
             });
 
@@ -6163,10 +6373,28 @@
             label.title = 'Double-click to rename';
             label.addEventListener('dblclick', (e) => {
                 e.stopPropagation();
+                const oldLabel = group.label;
                 const newLabel = prompt('Rename group:', group.label);
                 if (newLabel !== null && newLabel.trim()) {
                     group.label = newLabel.trim();
                     label.textContent = group.label;
+                    const groupId = group.id;
+                    const savedNew = group.label;
+                    pushUndo({
+                        type: 'group-rename',
+                        undo: () => {
+                            const g = groups.find(gr => gr.id === groupId);
+                            if (g) g.label = oldLabel;
+                            const el = document.getElementById(groupId);
+                            if (el) { const lbl = el.querySelector('.group-label'); if (lbl) lbl.textContent = oldLabel; }
+                        },
+                        redo: () => {
+                            const g = groups.find(gr => gr.id === groupId);
+                            if (g) g.label = savedNew;
+                            const el = document.getElementById(groupId);
+                            if (el) { const lbl = el.querySelector('.group-label'); if (lbl) lbl.textContent = savedNew; }
+                        }
+                    });
                 }
             });
 
@@ -6176,12 +6404,47 @@
             collapseBtn.title = group.collapsed ? 'Expand' : 'Collapse';
             collapseBtn.onclick = (e) => {
                 e.stopPropagation();
+                const wasCollapsed = group.collapsed;
                 group.collapsed = !group.collapsed;
                 collapseBtn.textContent = group.collapsed ? '+' : '−';
                 rect.classList.toggle('collapsed', group.collapsed);
                 group.noteIds.forEach(id => {
                     const el = document.getElementById(id);
                     if (el) el.style.display = group.collapsed ? 'none' : '';
+                });
+                const groupId = group.id;
+                pushUndo({
+                    type: 'group-collapse',
+                    undo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (!g) return;
+                        g.collapsed = wasCollapsed;
+                        const gel = document.getElementById(groupId);
+                        if (gel) {
+                            gel.classList.toggle('collapsed', wasCollapsed);
+                            const btn = gel.querySelector('.group-collapse-btn');
+                            if (btn) { btn.textContent = wasCollapsed ? '+' : '−'; }
+                        }
+                        g.noteIds.forEach(id => {
+                            const el = document.getElementById(id);
+                            if (el) el.style.display = wasCollapsed ? 'none' : '';
+                        });
+                    },
+                    redo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (!g) return;
+                        g.collapsed = !wasCollapsed;
+                        const gel = document.getElementById(groupId);
+                        if (gel) {
+                            gel.classList.toggle('collapsed', !wasCollapsed);
+                            const btn = gel.querySelector('.group-collapse-btn');
+                            if (btn) { btn.textContent = !wasCollapsed ? '+' : '−'; }
+                        }
+                        g.noteIds.forEach(id => {
+                            const el = document.getElementById(id);
+                            if (el) el.style.display = !wasCollapsed ? 'none' : '';
+                        });
+                    }
                 });
             };
 
@@ -6268,17 +6531,58 @@
 
         function endGroupZoneDrag() {
             if (draggingGroupZone) {
+                const group = draggingGroupZone;
+                const origGroupPos = { ...groupZoneOrigPos };
+                const origNotePositions = { ...groupZoneNoteOffsets };
+                const newGroupPos = { x: group.x, y: group.y };
+                const newNotePositions = {};
+
                 // Update note data positions
-                draggingGroupZone.noteIds.forEach(id => {
+                group.noteIds.forEach(id => {
                     const noteEl = document.getElementById(id);
                     const nd = notes.find(n => n.id === id);
                     if (noteEl && nd) {
                         nd.x = parseInt(noteEl.style.left);
                         nd.y = parseInt(noteEl.style.top);
+                        newNotePositions[id] = { x: nd.x, y: nd.y };
                     }
                 });
+
+                const groupId = group.id;
+                pushUndo({
+                    type: 'group-zone-move',
+                    undo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (g) { g.x = origGroupPos.x; g.y = origGroupPos.y; }
+                        const el = document.getElementById(groupId);
+                        if (el) { el.style.left = origGroupPos.x + 'px'; el.style.top = origGroupPos.y + 'px'; }
+                        Object.entries(origNotePositions).forEach(([id, pos]) => {
+                            const noteEl = document.getElementById(id);
+                            const nd = notes.find(n => n.id === id);
+                            if (noteEl) { noteEl.style.left = pos.x + 'px'; noteEl.style.top = pos.y + 'px'; }
+                            if (nd) { nd.x = pos.x; nd.y = pos.y; }
+                            updateConnectionsForNote(id);
+                        });
+                        renderMinimap();
+                    },
+                    redo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (g) { g.x = newGroupPos.x; g.y = newGroupPos.y; }
+                        const el = document.getElementById(groupId);
+                        if (el) { el.style.left = newGroupPos.x + 'px'; el.style.top = newGroupPos.y + 'px'; }
+                        Object.entries(newNotePositions).forEach(([id, pos]) => {
+                            const noteEl = document.getElementById(id);
+                            const nd = notes.find(n => n.id === id);
+                            if (noteEl) { noteEl.style.left = pos.x + 'px'; noteEl.style.top = pos.y + 'px'; }
+                            if (nd) { nd.x = pos.x; nd.y = pos.y; }
+                            updateConnectionsForNote(id);
+                        });
+                        renderMinimap();
+                    }
+                });
+
                 // Update connections for moved notes
-                draggingGroupZone.noteIds.forEach(id => updateConnectionsForNote(id));
+                group.noteIds.forEach(id => updateConnectionsForNote(id));
                 renderMinimap();
             }
             draggingGroupZone = null;
@@ -6406,8 +6710,16 @@
         }
 
         // Auto-layout: arrange notes in a grid inside the group zone
-        function autoLayoutGroup(group) {
+        function autoLayoutGroup(group, skipUndo) {
             if (!group || group.noteIds.length === 0) return;
+
+            // Snapshot before positions for undo
+            const savedGroupState = { x: group.x, y: group.y, width: group.width, height: group.height };
+            const savedNotePositions = {};
+            group.noteIds.forEach(nid => {
+                const nd = notes.find(n => n.id === nid);
+                if (nd) savedNotePositions[nid] = { x: nd.x, y: nd.y };
+            });
 
             const pad = 24;
             const headerH = 36;
@@ -6451,6 +6763,45 @@
                 }
             });
 
+            if (!skipUndo) {
+                const newGroupState = { x: group.x, y: group.y, width: group.width, height: group.height };
+                const newNotePositions = {};
+                group.noteIds.forEach(nid => {
+                    const nd = notes.find(n => n.id === nid);
+                    if (nd) newNotePositions[nid] = { x: nd.x, y: nd.y };
+                });
+                const groupId = group.id;
+                pushUndo({
+                    type: 'group-auto-layout',
+                    undo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (g) Object.assign(g, savedGroupState);
+                        const gel = document.getElementById(groupId);
+                        if (gel) { gel.style.left = savedGroupState.x + 'px'; gel.style.top = savedGroupState.y + 'px'; gel.style.width = savedGroupState.width + 'px'; gel.style.height = savedGroupState.height + 'px'; }
+                        Object.entries(savedNotePositions).forEach(([id, pos]) => {
+                            const noteEl = document.getElementById(id);
+                            const nd = notes.find(n => n.id === id);
+                            if (noteEl) { noteEl.style.left = pos.x + 'px'; noteEl.style.top = pos.y + 'px'; }
+                            if (nd) { nd.x = pos.x; nd.y = pos.y; }
+                        });
+                        renderAllConnections(); renderMinimap();
+                    },
+                    redo: () => {
+                        const g = groups.find(gr => gr.id === groupId);
+                        if (g) Object.assign(g, newGroupState);
+                        const gel = document.getElementById(groupId);
+                        if (gel) { gel.style.left = newGroupState.x + 'px'; gel.style.top = newGroupState.y + 'px'; gel.style.width = newGroupState.width + 'px'; gel.style.height = newGroupState.height + 'px'; }
+                        Object.entries(newNotePositions).forEach(([id, pos]) => {
+                            const noteEl = document.getElementById(id);
+                            const nd = notes.find(n => n.id === id);
+                            if (noteEl) { noteEl.style.left = pos.x + 'px'; noteEl.style.top = pos.y + 'px'; }
+                            if (nd) { nd.x = pos.x; nd.y = pos.y; }
+                        });
+                        renderAllConnections(); renderMinimap();
+                    }
+                });
+            }
+
             refreshGroupCount(group);
             renderAllConnections();
             renderMinimap();
@@ -6461,6 +6812,11 @@
                 updateStatus('No groups to organize');
                 return;
             }
+
+            // Snapshot all group and note positions for undo
+            const savedGroups = groups.map(g => ({ id: g.id, x: g.x, y: g.y, width: g.width, height: g.height }));
+            const savedNotePositions = {};
+            notes.forEach(n => { savedNotePositions[n.id] = { x: n.x, y: n.y }; });
 
             // Start position: top-left of current viewport
             const canvas = document.getElementById('canvas');
@@ -6503,9 +6859,9 @@
                 g.width = gw;
                 g.height = gh;
 
-                // Layout notes inside
+                // Layout notes inside (skip individual undo since we wrap the whole operation)
                 if (count > 0) {
-                    autoLayoutGroup(g);
+                    autoLayoutGroup(g, true);
                 } else {
                     const el = document.getElementById(g.id);
                     if (el) {
@@ -6519,6 +6875,33 @@
                 currentX += gw + groupGap;
                 rowMaxHeight = Math.max(rowMaxHeight, gh);
                 organized++;
+            });
+
+            // Snapshot after positions
+            const afterGroups = groups.map(g => ({ id: g.id, x: g.x, y: g.y, width: g.width, height: g.height }));
+            const afterNotePositions = {};
+            notes.forEach(n => { afterNotePositions[n.id] = { x: n.x, y: n.y }; });
+
+            function applySnapshot(groupSnap, noteSnap) {
+                groupSnap.forEach(gs => {
+                    const g = groups.find(gr => gr.id === gs.id);
+                    if (g) { g.x = gs.x; g.y = gs.y; g.width = gs.width; g.height = gs.height; }
+                    const el = document.getElementById(gs.id);
+                    if (el) { el.style.left = gs.x + 'px'; el.style.top = gs.y + 'px'; el.style.width = gs.width + 'px'; el.style.height = gs.height + 'px'; }
+                });
+                Object.entries(noteSnap).forEach(([id, pos]) => {
+                    const nd = notes.find(n => n.id === id);
+                    if (nd) { nd.x = pos.x; nd.y = pos.y; }
+                    const el = document.getElementById(id);
+                    if (el) { el.style.left = pos.x + 'px'; el.style.top = pos.y + 'px'; }
+                });
+                renderAllConnections(); renderMinimap();
+            }
+
+            pushUndo({
+                type: 'organize-all-groups',
+                undo: () => applySnapshot(savedGroups, savedNotePositions),
+                redo: () => applySnapshot(afterGroups, afterNotePositions)
             });
 
             // Also position ungrouped notes below all groups
@@ -6761,10 +7144,27 @@
             const conn = connections.find(c => c.id === editingConnectionId);
             if (!conn) return;
 
+            const oldType = conn.type;
+            const oldLabel = conn.label;
             const popover = document.getElementById('connectionPopover');
             const selectedType = popover.querySelector('input[name="connType"]:checked');
             conn.type = selectedType ? selectedType.value : 'related';
             conn.label = document.getElementById('connLabelInput').value.trim();
+            const newType = conn.type;
+            const newLabel = conn.label;
+            const connId = conn.id;
+
+            pushUndo({
+                type: 'connection-edit',
+                undo: () => {
+                    const c = connections.find(cn => cn.id === connId);
+                    if (c) { c.type = oldType; c.label = oldLabel; renderConnection(c); }
+                },
+                redo: () => {
+                    const c = connections.find(cn => cn.id === connId);
+                    if (c) { c.type = newType; c.label = newLabel; renderConnection(c); }
+                }
+            });
 
             renderConnection(conn);
             closeConnectionPopover();
@@ -7430,6 +7830,7 @@
 
             const speakerColorMap = { 1: 'blue', 2: 'green', 3: 'pink', 4: 'purple', 5: 'orange', 6: 'tan', 7: 'gray', 8: 'yellow' };
             let noteIndex = 0;
+            const createdNotes = [];
 
             function makeNote(text, speaker, speakerNum) {
                 const pid = speaker ? speakerToParticipant[speaker] : defaultPid;
@@ -7445,6 +7846,7 @@
                 const nd = notes.find(n => n.id === note.id);
                 if (nd) { nd.x = parseInt(note.style.left); nd.y = parseInt(note.style.top); }
                 canvasInner.appendChild(note);
+                if (nd) createdNotes.push({ ...nd, tags: [...(nd.tags || [])] });
                 noteIndex++;
             }
 
@@ -7458,6 +7860,19 @@
             // Import marked sub-quotes
             transcriptMarkedQuotes.forEach(q => {
                 makeNote(q.text, q.speaker, q.speakerNum);
+            });
+
+            pushUndo({
+                type: 'import-quotes',
+                noteIds: createdNotes.map(n => n.id),
+                undo: () => {
+                    createdNotes.forEach(n => removeNoteRaw(n.id));
+                    renderMinimap();
+                },
+                redo: () => {
+                    createdNotes.forEach(n => recreateNote(n));
+                    renderMinimap();
+                }
             });
 
             closeTranscriptViewer();
