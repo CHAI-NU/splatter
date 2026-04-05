@@ -3,11 +3,11 @@
 **One HTML file. Zero installation. Built for qualitative researchers.**
 
 
-## [TRY OUT SPLATTER](https://hasiburrahman.cc/splatter/)
+## [TRY OUT SPLATTER](https://hasiburrahman.net/splatter/)
 
 Splatter is a single-file qualitative coding and affinity diagramming tool that runs entirely in your browser. Import interview transcripts, tag quotes, group themes, draw connections, and export your analysis — all without leaving the page.
 
-> **Based on [Splat](https://github.com/ianarawjo/splat) by Ian Arawjo and the Montréal HCI group.** Modified by [Hasibur Rahman](https://hasiburrahman.cc/) at [CHAI Lab](https://chainortheastern.net/). Licensed under GPL v3.0.
+> **Based on [Splat](https://github.com/ianarawjo/splat) by Ian Arawjo and the Montréal HCI group.** Modified by [Hasibur Rahman](https://hasiburrahman.net/) at [CHAI Lab](https://chainortheastern.net/). Licensed under GPL v3.0.
 
 ## How to Use
 
@@ -90,7 +90,7 @@ Then restart Ollama and serve with `ollama serve`. The Ollama model you choose m
 ## Credits
 
 - **Original tool**: [Splat](https://github.com/ianarawjo/splat) by [Ian Arawjo](https://ianarawjo.com) and the [Montréal HCI](https://hci.iro.umontreal.ca/) group. AI assistance and search features by Jingyue Zhang, Ling Xin He, and Yunfan Shang.
-- **Splatter modifications**: [Hasibur Rahman](https://hasiburrahman.cc/) at [CHAI Lab](https://chainortheastern.net/) — undo/redo, tags/codebook, groups, memos, connections, transcript import, participant filtering, multi-board tabs, minimap, OpenRouter support, UI/UX redesign.
+- **Splatter modifications**: [Hasibur Rahman](https://hasiburrahman.net/) at [CHAI Lab](https://chainortheastern.net/) — undo/redo, tags/codebook, groups, memos, connections, transcript import, participant filtering, multi-board tabs, minimap, OpenRouter support, UI/UX redesign.
 
 ## License
 
